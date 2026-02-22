@@ -1,0 +1,39 @@
+# Oracle DB Read-Only Proxy + Pi Agent
+#
+# Usage:
+#   1. Copy .env.example to .env and fill in your Oracle credentials
+#   2. docker compose up -d
+#   3. Pi can query the DB via http://oracle-proxy:8080
+#
+# The pi container has NO access to the Oracle credentials.
+# Only the proxy container connects to Oracle.
+
+services:
+  oracle-proxy:
+    build:
+      context: .
+      dockerfile: Dockerfile.proxy
+    env_file: .env
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  pi:
+    build:
+      context: .
+      dockerfile: Dockerfile.pi
+    depends_on:
+      oracle-proxy:
+        condition: service_healthy
+    stdin_open: true
+    tty: true
+    volumes:
+      - .:/workspace
+      - pi-skills:/root/.pi/agent/skills
+
+volumes:
+  pi-skills:

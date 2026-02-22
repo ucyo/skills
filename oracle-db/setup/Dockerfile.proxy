@@ -1,0 +1,9 @@
+FROM python:3.12-slim
+
+RUN pip install --no-cache-dir oracledb
+
+COPY proxy.py /app/proxy.py
+
+EXPOSE 8080
+
+CMD ["python3", "/app/proxy.py"]
