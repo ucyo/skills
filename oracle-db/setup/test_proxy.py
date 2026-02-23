@@ -17,7 +17,7 @@ import time
 import urllib.error
 import urllib.request
 
-PROXY = os.path.join(os.path.dirname(__file__), "skills/oracle-db/setup/proxy.py")
+PROXY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "proxy.py")
 PORT = 18080
 BASE = f"http://localhost:{PORT}"
 
