@@ -25,6 +25,7 @@ PASS = "\033[32mPASS\033[0m"
 FAIL = "\033[31mFAIL\033[0m"
 
 results = []
+_db_path = None  # set in main(), used by truncation test
 
 
 # ---------------------------------------------------------------------------
@@ -49,6 +50,18 @@ def post(path, body):
     )
     with urllib.request.urlopen(req, timeout=5) as r:
         return r.status, json.loads(r.read())
+
+
+def post_raw(path, raw_body, content_type="application/json"):
+    """POST raw bytes — useful for testing malformed payloads."""
+    req = urllib.request.Request(
+        f"{BASE}{path}", data=raw_body, headers={"Content-Type": content_type}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:
+            return r.status, json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        return e.code, json.loads(e.read())
 
 
 def post_expect_error(path, body):
@@ -201,6 +214,95 @@ def test_query_blocked():
     check("returns 400 for missing sql", status == 400)
 
 
+def test_query_edge_cases():
+    print("\n=== /query — empty SQL string ===")
+    status, data = post_expect_error("/query", {"sql": ""})
+    check("empty SQL blocked", status == 403)
+
+    print("\n=== /query — SQL injection via block comment ===")
+    # Dangerous keyword hidden inside a block comment before SELECT
+    for sql in [
+        "/* DROP TABLE employees */ SELECT 1",
+        "SELECT 1 /* ; DELETE FROM employees */",
+        "-- DROP TABLE employees\nSELECT 1",
+    ]:
+        status, data = post("/query", {"sql": sql})
+        check(f"comment-wrapped SQL allowed: {sql[:40]!r}", status == 200)
+
+    # Dangerous keyword as actual statement disguised with comment prefix
+    status, data = post_expect_error("/query", {"sql": "/* comment */ DELETE FROM employees"})
+    check("DELETE after comment is blocked", status == 403)
+
+    print("\n=== /query — WITH + dangerous keyword ===")
+    status, data = post_expect_error("/query", {
+        "sql": "WITH x AS (SELECT 1) DELETE FROM employees"
+    })
+    check("WITH + DELETE blocked", status == 403)
+
+    status, data = post_expect_error("/query", {
+        "sql": "WITH x AS (SELECT 1) DROP TABLE employees"
+    })
+    check("WITH + DROP blocked", status == 403)
+
+    # Valid CTE should still work
+    status, data = post("/query", {
+        "sql": "WITH eng AS (SELECT name FROM employees WHERE dept='Engineering') SELECT * FROM eng"
+    })
+    check("valid CTE allowed", status == 200)
+    check("valid CTE returns 2 rows", data.get("row_count") == 2)
+
+    print("\n=== /query — non-existent table ===")
+    status, data = post_expect_error("/query", {"sql": "SELECT * FROM no_such_table"})
+    check("non-existent table returns 500", status == 500)
+    check("error message present", "error" in data)
+
+    print("\n=== /query — malformed JSON body ===")
+    status, data = post_raw("/query", b"{not valid json")
+    check("malformed JSON returns 500", status == 500)
+
+    print("\n=== /query — truncation ===")
+    # Start a fresh proxy with MAX_ROWS=2 to test truncation
+    import subprocess, os, signal
+    env = {**os.environ, "DB_TYPE": "sqlite", "DB_NAME": _db_path, "PORT": "18081", "MAX_ROWS": "2"}
+    proc = subprocess.Popen([sys.executable, PROXY], env=env,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    base_orig = BASE
+    try:
+        # Wait for second proxy
+        import time
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            try:
+                urllib.request.urlopen("http://localhost:18081/health", timeout=1)
+                break
+            except Exception:
+                time.sleep(0.2)
+
+        data2 = json.loads(
+            urllib.request.urlopen(
+                urllib.request.Request(
+                    "http://localhost:18081/query",
+                    data=json.dumps({"sql": "SELECT * FROM employees"}).encode(),
+                    headers={"Content-Type": "application/json"},
+                ), timeout=5
+            ).read()
+        )
+        check("truncated is true when rows exceed MAX_ROWS", data2.get("truncated") == True)
+        check("row_count equals MAX_ROWS",                   data2.get("row_count") == 2)
+    finally:
+        proc.send_signal(signal.SIGTERM)
+        proc.wait(timeout=5)
+
+
+def test_search_missing_param():
+    print("\n=== /search — missing q param ===")
+    try:
+        get("/search")
+        check("returns 400 for missing q", False, "expected error but got 200")
+    except urllib.error.HTTPError as e:
+        check("returns 400 for missing q", e.code == 400)
+
+
 def test_not_found():
     print("\n=== 404 for unknown paths ===")
     try:
@@ -215,9 +317,12 @@ def test_not_found():
 # ---------------------------------------------------------------------------
 
 def main():
+    global _db_path
+
     # Create temp SQLite database
     db_fd, db_path = tempfile.mkstemp(suffix=".db")
     os.close(db_fd)
+    _db_path = db_path
     create_test_db(db_path)
     print(f"Test DB: {db_path}")
 
@@ -251,6 +356,8 @@ def main():
         test_search()
         test_query()
         test_query_blocked()
+        test_query_edge_cases()
+        test_search_missing_param()
         test_not_found()
 
     finally:
