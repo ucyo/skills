@@ -1,21 +1,26 @@
-# Oracle DB Read-Only Proxy + Pi Agent
+# SQL DB Read-Only Proxy + Pi Agent
 #
 # Usage:
-#   1. Copy .env.example to .env and fill in your Oracle credentials
+#   1. Copy .env.example to .env and fill in your database credentials
 #   2. docker compose up -d
-#   3. Pi can query the DB via http://oracle-proxy:8080
+#   3. Pi can query the DB via http://sql-proxy:8080
 #
-# The pi container has NO access to the Oracle credentials.
-# Only the proxy container connects to Oracle.
+# The pi container has NO access to the database credentials.
+# Only the proxy container connects to the database.
+#
+# Supported DB_TYPE values: oracle | postgres | mysql | sqlite
 
 services:
-  oracle-proxy:
+  sql-proxy:
     build:
       context: .
       dockerfile: Dockerfile.proxy
     env_file: .env
     ports:
       - "8080:8080"
+    # For SQLite: mount the database file into the container, e.g.:
+    # volumes:
+    #   - /path/to/your/app.db:/data/app.db:ro
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
       interval: 10s
@@ -27,7 +32,7 @@ services:
       context: .
       dockerfile: Dockerfile.pi
     depends_on:
-      oracle-proxy:
+      sql-proxy:
         condition: service_healthy
     stdin_open: true
     tty: true
