@@ -1,0 +1,14 @@
+FROM python:3.12-slim
+
+# Install drivers for all supported databases.
+# oracledb  -> Oracle
+# psycopg2  -> PostgreSQL
+# pymysql   -> MySQL / MariaDB
+# sqlite3 is part of the Python standard library (no install needed)
+RUN pip install --no-cache-dir oracledb psycopg2-binary pymysql
+
+COPY proxy.py /app/proxy.py
+
+EXPOSE 8080
+
+CMD ["python3", "/app/proxy.py"]
